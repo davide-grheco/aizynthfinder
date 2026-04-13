@@ -1,4 +1,4 @@
-""" Module containing the implementation of a reaction tree or route and factory classes to make such trees """
+"""Module containing the implementation of a reaction tree or route and factory classes to make such trees"""
 
 from __future__ import annotations
 
@@ -189,30 +189,62 @@ class ReactionTree:
             if not isinstance(node, Molecule):
                 yield node
 
+    def get_subtree(self, mol: Molecule) -> ReactionTree:
+        """
+        Returns a subtree from the current tree that has the given molecule
+        as the root node. Leaf nodes will also be returned as a subtree.
+        :param mol: the query molecule
+        :return: the subtree if found
+        """
+
+        # If molecule is not found in tree
+        if mol not in list(self.molecules()):
+            raise ValueError("Molecule not found in tree.")
+
+        # If molecule is the root of the original tree
+        if mol is self.root:
+            return self
+
+        subtree = ReactionTree()
+        subtree.root = mol
+        subtree.graph = dfs_tree(self.graph, mol)
+
+        for node in subtree.graph:
+            prop = dict(self.graph.nodes[node])
+            prop["depth"] -= self.graph.nodes[mol].get("depth", 0)
+            if "transform" in prop:
+                prop["transform"] -= self.graph.nodes[mol].get("transform", 0)
+            subtree.graph.nodes[node].update(prop)
+        subtree.is_solved = all(subtree.in_stock(node) for node in subtree.leafs())
+        return subtree
+
+    def get_subtree_from_smiles(self, query: str) -> ReactionTree:
+        """
+        Returns a subtree from the current tree that has the given
+        molecule, given by a SMILES representation, as the root node.
+        :param query: the query molecule SMILES
+        :return: the subtree if found
+        """
+        molecules = list(self.molecules())
+        tree_smiles = [mol.smiles for mol in molecules]
+        if query not in tree_smiles:
+            raise ValueError("Molecule SMILES not found in tree.")
+
+        # Get the actual molecule object from the tree
+        mol = molecules[tree_smiles.index(query)]
+
+        return self.get_subtree(mol)
+
     def subtrees(self) -> Iterable[ReactionTree]:
         """
-        Generates the subtrees of this reaction tree a
-        subtree is a reaction treee starting at a molecule node that has children.
+        Generates all subtrees of this reaction tree. A
+        subtree is a reaction tree starting at a molecule node that has children.
 
         :yield: the next subtree
         """
-
-        def create_subtree(root_node):
-            subtree = ReactionTree()
-            subtree.root = root_node
-            subtree.graph = dfs_tree(self.graph, root_node)
-            for node in subtree.graph:
-                prop = dict(self.graph.nodes[node])
-                prop["depth"] -= self.graph.nodes[root_node].get("depth", 0)
-                if "transform" in prop:
-                    prop["transform"] -= self.graph.nodes[root_node].get("transform", 0)
-                subtree.graph.nodes[node].update(prop)
-            subtree.is_solved = all(subtree.in_stock(node) for node in subtree.leafs())
-            return subtree
-
         for node in self.molecules():
             if node is not self.root and self.graph[node]:
-                yield create_subtree(node)
+                yield self.get_subtree(node)
 
     def to_dict(self, include_metadata=False) -> StrDict:
         """
@@ -235,7 +267,9 @@ class ReactionTree:
         :return: the image of the route
         """
         factory = RouteImageFactory(
-            self.to_dict(), in_stock_colors=in_stock_colors, show_all=show_all
+            self.to_dict(),
+            in_stock_colors=in_stock_colors,
+            show_all=show_all,
         )
         return factory.image
 
@@ -246,7 +280,9 @@ class ReactionTree:
         :return: the reaction tree
         """
         return json.dumps(
-            self.to_dict(include_metadata=include_metadata), sort_keys=False, indent=2
+            self.to_dict(include_metadata=include_metadata),
+            sort_keys=False,
+            indent=2,
         )
 
     def _build_dict(
@@ -392,7 +428,9 @@ class ReactionTreeFromDict(ReactionTreeLoader):
             metadata=rxn_tree_dict.get("metadata", {}),
         )
         self._add_node(
-            reaction_node, depth=2 * ncalls + 1, hide=rxn_tree_dict.get("hide", False)
+            reaction_node,
+            depth=2 * ncalls + 1,
+            hide=rxn_tree_dict.get("hide", False),
         )
         self.tree.graph.add_edge(product_node, reaction_node)
 

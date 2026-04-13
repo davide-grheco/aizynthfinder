@@ -1,5 +1,6 @@
 import pytest
 
+from aizynthfinder.chem import Molecule
 from aizynthfinder.reactiontree import ReactionTree
 
 
@@ -14,7 +15,10 @@ def test_mcts_route_to_reactiontree(setup_linear_mcts, load_reaction_tree):
     expected_dict = load_reaction_tree("linear_route.json")
 
     reaction_tree = node.to_reaction_tree()
-    assert reaction_tree.metadata == {"created_at_iteration": 1, "is_solved": True}
+    assert reaction_tree.metadata == {
+        "created_at_iteration": 1,
+        "is_solved": True,
+    }
 
     mol_nodes = list(reaction_tree.molecules())
     assert len(mol_nodes) == 5
@@ -139,6 +143,82 @@ def test_route_hash(load_reaction_tree):
     rt = ReactionTree.from_dict(dict_)
 
     assert rt.hash_key() == "1514c305b6dcddc0a2e4133ff77cd53893d25c4e5caaca7dc53490fe"
+
+
+def test_get_subtree(load_reaction_tree):
+    dict_ = load_reaction_tree("branched_route.json")
+    tree = ReactionTree.from_dict(dict_)
+    molecules = list(tree.molecules())
+
+    # This is the root node
+    str0 = tree.get_subtree(molecules[0])
+    assert str0 == tree
+    assert len(list(str0.molecules())) == 9
+
+    str1 = tree.get_subtree(molecules[1])
+    assert len(list(str1.molecules())) == 5
+    assert [str1.depth(mol) for mol in list(str1.molecules())] == [
+        0,
+        2,
+        2,
+        4,
+        4,
+    ]
+
+    # This is a leaf node
+    str2 = tree.get_subtree(molecules[2])
+    assert len(list(str2.molecules())) == 1
+    assert [str2.depth(mol) for mol in list(str2.molecules())] == [0]
+
+    str3 = tree.get_subtree(molecules[3])
+    assert len(list(str3.molecules())) == 3
+    assert [str3.depth(mol) for mol in list(str3.molecules())] == [
+        0,
+        2,
+        2,
+    ]
+
+    # This molecule is not found in the tree
+    extra_mol = Molecule(
+        smiles="CCOC(=O)c1sc(-c2cccc(NC(=O)c3cnns3)c2)nc1Nc1ccc(Br)cc1"
+    )
+    with pytest.raises(ValueError):
+        tree.get_subtree(extra_mol)
+
+
+def test_get_subtree_from_smiles(load_reaction_tree):
+    dict_ = load_reaction_tree("branched_route.json")
+    tree = ReactionTree.from_dict(dict_)
+    molecules = list(tree.molecules())
+
+    # Test that get_subtree_from_smiles produces the same result as get_subtree
+    # for various molecules in the tree
+    for mol in molecules[:4]:  # Test first 4 molecules
+        subtree_from_mol = tree.get_subtree(mol)
+        subtree_from_smiles = tree.get_subtree_from_smiles(mol.smiles)
+
+        # The subtrees should be equivalent
+        assert len(list(subtree_from_smiles.molecules())) == len(
+            list(subtree_from_mol.molecules())
+        )
+        assert [
+            subtree_from_smiles.depth(m) for m in subtree_from_smiles.molecules()
+        ] == [subtree_from_mol.depth(m) for m in subtree_from_mol.molecules()]
+
+    # Test a root node
+    root_smiles = molecules[0].smiles
+    str0 = tree.get_subtree_from_smiles(root_smiles)
+    assert len(list(str0.molecules())) == 9
+
+    # Test a non-root node
+    mol1_smiles = molecules[1].smiles
+    str1 = tree.get_subtree_from_smiles(mol1_smiles)
+    assert len(list(str1.molecules())) >= 1
+
+    # This molecule SMILES is not found in the tree
+    extra_smiles = "CCOC(=O)c1sc(-c2cccc(NC(=O)c3cnns3)c2)nc1Nc1ccc(Br)cc1"
+    with pytest.raises(ValueError):
+        tree.get_subtree_from_smiles(extra_smiles)
 
 
 def test_subtrees(load_reaction_tree):
