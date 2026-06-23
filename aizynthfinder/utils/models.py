@@ -59,10 +59,17 @@ _ONNX_PROVIDERS_CACHE = None
 
 def _get_onnx_providers() -> list:
     """
-    Determine the optimal ONNX Runtime execution providers.
+    Determine the ONNX Runtime execution providers to *request*.
 
-    Returns a list of providers in priority order. CUDA is preferred if available
-    and AIZYNTHFINDER_USE_GPU is not set to "0".
+    Returns a list of providers in priority order. CUDA is requested if it is
+    compiled into onnxruntime and AIZYNTHFINDER_USE_GPU is not set to "0".
+
+    NOTE: a provider being listed here only means it is available to *try* —
+    ``get_available_providers()`` reports what onnxruntime was built with, not
+    what can actually initialise on this machine (the CUDA EP can still fail to
+    load at session creation if the CUDA/cuDNN runtime libraries are missing).
+    The authoritative check is ``_verify_session_providers``, called once a real
+    session exists. Do not log "GPU enabled" from here — it would be a guess.
 
     The result is cached for efficiency across multiple model loads.
     """
@@ -90,13 +97,48 @@ def _get_onnx_providers() -> list:
 
     _ONNX_PROVIDERS_CACHE = providers
 
-    # Log provider selection once
-    gpu_enabled = "CUDAExecutionProvider" in providers
-    _logger.info(
-        f"ONNX Runtime providers: {providers} (GPU {'enabled' if gpu_enabled else 'disabled'})"
-    )
+    _logger.info(f"ONNX Runtime providers requested: {providers}")
 
     return providers
+
+
+def _verify_session_providers(session: "onnxruntime.InferenceSession") -> None:
+    """Log the providers a session *actually* loaded, and warn on silent fallback.
+
+    ``onnxruntime`` does not raise when a requested execution provider fails to
+    initialise — it logs to its own C++ logger and quietly runs on whatever did
+    load (usually CPU). The only trustworthy signal is ``get_providers()`` on a
+    live session, so the GPU-active log is emitted from here rather than from
+    request-time detection (which can only see what was compiled in).
+
+    On the first observed fallback we also drop CUDA from the cached request
+    list so subsequent model loads don't re-attempt — and re-spam — the failing
+    provider.
+    """
+    global _ONNX_PROVIDERS_CACHE
+
+    requested = _ONNX_PROVIDERS_CACHE or []
+    active = list(session.get_providers())
+    gpu_requested = "CUDAExecutionProvider" in requested
+    gpu_active = "CUDAExecutionProvider" in active
+
+    if gpu_requested and not gpu_active:
+        _logger.warning(
+            "ONNX GPU was requested but CUDAExecutionProvider failed to "
+            "initialise; running inference on CPU. Active providers: %s. "
+            "Check that the CUDA 12 / cuDNN 9 runtime libraries are on the "
+            "library path (e.g. libcublasLt.so.12). Set AIZYNTHFINDER_USE_GPU=0 "
+            "to silence this.",
+            active,
+        )
+        # Don't re-attempt the failing provider on later loads.
+        _ONNX_PROVIDERS_CACHE = [p for p in requested if p != "CUDAExecutionProvider"]
+    else:
+        _logger.info(
+            "ONNX Runtime active providers: %s (GPU %s)",
+            active,
+            "active" if gpu_active else "disabled",
+        )
 
 
 def load_model(
@@ -209,6 +251,8 @@ class LocalOnnxModel:
             sess_options=session_options,
             providers=providers
         )
+        # Authoritative GPU check: log what actually loaded, not what was asked.
+        _verify_session_providers(self.model)
         self._model_inputs = self.model.get_inputs()
         self._model_output = self.model.get_outputs()[0]
         self._model_dimensions = int(self._model_inputs[0].shape[1])
